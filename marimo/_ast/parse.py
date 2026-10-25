@@ -269,18 +269,10 @@ class Extractor:
         end_lineno = _none_to_0(node.end_lineno)
         end_col_offset = node.end_col_offset
         assert len(node.body) > 0
-        if node.lineno - node.body[0].lineno == 0:
-            # Quirk where the ellipse token seems to have a line index at
-            # the end of the dots ...<
-            if _is_ellipsis(getattr(node.body[0], "value", None)):
-                col_offset += node.body[0].col_offset - 3
-            else:
-                col_offset += node.body[0].col_offset - 1
-        else:
-            col_offset = 0
-
         has_return = isinstance(node.body[-1], ast.Return)
         single_line = node.lineno - node.body[-1].lineno == 0
+        if single_line and not has_return:
+            end_col_offset = len(self.lines[end_lineno - 1])
         if has_return:
             # we need to adjust for the trailing return statement
             # which is not included in the function body
@@ -292,7 +284,11 @@ class Extractor:
                 end_col_offset = len(self.lines[end_lineno - 1]) + 1
                 if node.body[-1].end_lineno == end_lineno:
                     end_lineno = node.body[-1].lineno
-                    end_col_offset = node.body[-1].col_offset
+                    end_col_offset = len(
+                        self.lines[end_lineno - 1]
+                        .encode("utf-8")[: node.body[-1].col_offset]
+                        .decode("utf-8")
+                    )
 
             # We're in the case where we have something like
             # @app.cell
@@ -894,8 +890,7 @@ def extract_offsets_post_colon(
         start_line = fn_body_token.start[0] - 1
         start_col = fn_body_token.start[1]
 
-    col_offset = fn_body_token.end[1] - start_col
-    return start_line, col_offset
+    return start_line, start_col
 
 
 def is_equal_ast(
@@ -1035,14 +1030,6 @@ def is_body_cell(node: Node) -> bool:
             decorator, allowed=("cell", "function", "class_definition")
         )
     ) or is_unparsable_cell(node)
-
-
-def _is_ellipsis(node: Node | None) -> bool:
-    if node is None:
-        return False
-    # ast.Ellipsis is deprecated in 3.12+ and removed in 3.14
-    # Use ast.Constant check which works across all Python versions
-    return isinstance(node, ast.Constant) and node.value is ...
 
 
 def _is_setup_call(node: Node) -> bool:
