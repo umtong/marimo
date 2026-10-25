@@ -133,7 +133,7 @@ class TestReceiveModelMessage:
 
         with (
             patch(
-                "marimo._runtime.kernel_request_handlers.WIDGET_COMM_MANAGER"
+                "marimo._runtime.runtime.WIDGET_COMM_MANAGER"
             ) as mock_comm_manager,
             patch.object(
                 kernel,
@@ -141,6 +141,7 @@ class TestReceiveModelMessage:
                 new=AsyncMock(),
             ) as mock_set_ui,
         ):
+            mock_comm_manager.comms.get.return_value.runtime_context = None
             mock_comm_manager.receive_comm_message.return_value = (
                 "ui-element-id",
                 {},
@@ -162,7 +163,7 @@ class TestReceiveModelMessage:
 
         with (
             patch(
-                "marimo._runtime.kernel_request_handlers.WIDGET_COMM_MANAGER"
+                "marimo._runtime.runtime.WIDGET_COMM_MANAGER"
             ) as mock_comm_manager,
             patch.object(
                 kernel,
@@ -170,6 +171,7 @@ class TestReceiveModelMessage:
                 new=AsyncMock(return_value=True),
             ) as mock_set_ui,
         ):
+            mock_comm_manager.comms.get.return_value.runtime_context = None
             mock_comm_manager.receive_comm_message.return_value = (
                 "ui-element-id",
                 {"value": 1},

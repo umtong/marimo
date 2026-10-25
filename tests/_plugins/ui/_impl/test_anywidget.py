@@ -4,9 +4,12 @@ from __future__ import annotations
 import gc
 import weakref
 from concurrent.futures import ThreadPoolExecutor
+from typing import TYPE_CHECKING
 
 import pytest
 
+from marimo._ast.cell import CellConfig
+from marimo._ast.codegen import generate_filecontents
 from marimo._dependencies.dependencies import DependencyManager
 from marimo._plugins.ui._core.ui_element import UIElement
 from marimo._plugins.ui._impl.anywidget.init import WIDGET_COMM_MANAGER
@@ -20,6 +23,7 @@ from marimo._plugins.ui._impl.from_anywidget import (
 from marimo._runtime.cell_lifecycle_registry import NoOwningCellError
 from marimo._runtime.commands import (
     ModelCommand,
+    ModelCustomMessage,
     ModelUpdateMessage,
     UpdateUIElementCommand,
 )
@@ -28,6 +32,9 @@ from marimo._runtime.runtime import Kernel
 from marimo._types.ids import WidgetModelId
 from marimo._utils.code import hash_code
 from tests.conftest import ExecReqProvider
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 HAS_DEPS = (
     DependencyManager.anywidget.has()
@@ -60,6 +67,93 @@ if HAS_DEPS:
 
 @pytest.mark.skipif(not HAS_DEPS, reason="optional dependencies not installed")
 class TestAnywidget:
+    @staticmethod
+    @pytest.mark.parametrize("embed_depth", [0, 1, 2])
+    @pytest.mark.parametrize("wrapped", [False, True])
+    async def test_custom_message_state_in_embedded_app(
+        k: Kernel,
+        exec_req: ExecReqProvider,
+        tmp_path: Path,
+        embed_depth: int,
+        wrapped: bool,
+    ) -> None:
+        codes = [
+            """
+import anywidget
+import marimo as mo
+
+class Counter(anywidget.AnyWidget):
+    _esm = ""
+
+c = Counter()
+get_count, set_count = mo.state(0)
+runs = []
+
+def _on_message(_widget, content, _buffers):
+    if content.get("event") == "click":
+        set_count(lambda count: count + 1)
+
+c.on_msg(_on_message)
+"""
+            + ("\nw = mo.ui.anywidget(c)" if wrapped else ""),
+            "runs.append(1)\nresult = get_count()",
+        ]
+        for depth in range(embed_depth):
+            path = tmp_path / f"embedded_{depth}.py"
+            path.write_text(
+                generate_filecontents(
+                    codes=codes,
+                    names=["_"] * len(codes),
+                    cell_configs=[CellConfig() for _ in codes],
+                ),
+                encoding="utf-8",
+            )
+            codes = [
+                f"from runpy import run_path\napp = run_path({str(path)!r})['app']\nruns = []",
+                """
+runs.append(1)
+embedding = await app.embed()
+c = embedding.defs["c"]
+get_count = embedding.defs["get_count"]
+result = embedding.defs["result"]
+""",
+            ]
+
+        await k.run([exec_req.get(code) for code in codes])
+        assert not k.errors
+        assert k.globals["result"] == 0
+        model_id = WidgetModelId(k.globals["c"]._model_id)
+        await k.handle_message(
+            ModelCommand(
+                model_id=model_id,
+                message=ModelCustomMessage(content={"event": "noop"}),
+                buffers=[],
+            )
+        )
+        assert len(k.globals["runs"]) == 1
+
+        await k.handle_message(
+            ModelCommand(
+                model_id=model_id,
+                message=ModelCustomMessage(content={"event": "click"}),
+                buffers=[],
+            )
+        )
+
+        assert (k.globals["get_count"](), k.globals["result"]) == (1, 1)
+        assert len(k.globals["runs"]) == 2
+
+        k.globals["c"].close()
+        for stale_id in (model_id, WidgetModelId("unknown-model")):
+            await k.handle_message(
+                ModelCommand(
+                    model_id=stale_id,
+                    message=ModelCustomMessage(content={"event": "click"}),
+                    buffers=[],
+                )
+            )
+        assert (k.globals["result"], len(k.globals["runs"])) == (1, 2)
+
     @staticmethod
     async def test_instances(k: Kernel, exec_req: ExecReqProvider) -> None:
         import anywidget as _anywidget

@@ -13,6 +13,7 @@ from marimo._runtime.commands import (
     AppMetadata,
     ExecuteCellCommand,
     InvokeFunctionCommand,
+    ModelCommand,
     UpdateUIElementCommand,
 )
 from marimo._runtime.context.types import get_context
@@ -216,3 +217,9 @@ class AppKernelRunner:
     ) -> tuple[HumanReadableStatus, JSONType, bool]:
         with self._runtime_context.install():
             return await self._kernel.function_call_request(request)
+
+    async def receive_model_message(
+        self, request: ModelCommand
+    ) -> tuple[bool, bool]:
+        with self._runtime_context.install():
+            return await self._kernel.receive_model_message(request)

@@ -22,7 +22,6 @@ from marimo._messaging.notification import (
     FunctionCallResultNotification,
 )
 from marimo._messaging.notification_utils import broadcast_notification
-from marimo._plugins.ui._impl.anywidget.init import WIDGET_COMM_MANAGER
 from marimo._runtime.commands import (
     CreateNotebookCommand,
     DebugCellCommand,
@@ -43,7 +42,6 @@ from marimo._runtime.commands import (
 from marimo._runtime.context import safe_get_context
 from marimo._runtime.context.kernel_context import KernelRuntimeContext
 from marimo._runtime.redirect_streams import stdin_context
-from marimo._types.ids import UIElementId
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -232,27 +230,7 @@ class KernelRequestHandlers:
         self, request: ModelCommand
     ) -> None:
         with self._run_context():
-            ui_element_id, state = WIDGET_COMM_MANAGER.receive_comm_message(
-                request
-            )
-
-            # Directly handle the UI element update instead of
-            # re-enqueuing it as a separate command. Re-enqueuing
-            # caused Model+UI interleaving that the batch merger
-            # couldn't collapse (different types), leading to every
-            # drag tick getting its own full cell re-execution.
-            if ui_element_id and state:
-                await self._kernel.set_ui_element_value(
-                    UpdateUIElementCommand.from_ids_and_values(
-                        [(UIElementId(ui_element_id), state)]
-                    ),
-                    notify_frontend=False,
-                )
-            elif self._kernel.state_updates:
-                # Callbacks during message processing (e.g. widget observe
-                # handlers) may have called mo.state setters. Process
-                # those pending state updates now.
-                await self._kernel._run_cells(set())
+            await self._kernel.receive_model_message(request)
 
     async def _handle_function_call(
         self, request: InvokeFunctionCommand

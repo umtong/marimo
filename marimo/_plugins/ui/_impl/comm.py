@@ -1,6 +1,7 @@
 # Copyright 2026 Marimo. All rights reserved.
 from __future__ import annotations
 
+import weakref
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -24,6 +25,7 @@ from marimo._types.ids import WidgetModelId
 
 if TYPE_CHECKING:
     from marimo._messaging.types import Stream
+    from marimo._runtime.context.types import RuntimeContext
     from marimo._runtime.context.utils import RunMode
 
 LOGGER = marimo_logger()
@@ -189,9 +191,14 @@ class MarimoComm:
         from marimo._runtime.context.utils import get_mode
 
         ctx = safe_get_context()
+        self._runtime_context = weakref.ref(ctx) if ctx is not None else None
         self._stream: Stream | None = ctx.stream if ctx is not None else None
         self._mode: RunMode | None = get_mode()
         self._open(data=data, buffers=buffers)
+
+    @property
+    def runtime_context(self) -> RuntimeContext | None:
+        return self._runtime_context() if self._runtime_context else None
 
     def _open(
         self,

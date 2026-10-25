@@ -48,6 +48,7 @@ from marimo._runtime.app.kernel_runner import AppKernelRunner
 from marimo._runtime.app.script_runner import AppScriptRunner
 from marimo._runtime.commands import (
     InvokeFunctionCommand,
+    ModelCommand,
     UpdateUIElementCommand,
 )
 from marimo._runtime.context.filename import notebook_filename
@@ -1096,6 +1097,13 @@ class InternalApp:
     def overrides(self) -> dict[str, Any] | None:
         """Overridden definitions; only matters for embedded apps."""
         return self._app._get_kernel_runner()._previously_seen_defs
+
+    async def receive_model_message(
+        self, request: ModelCommand
+    ) -> tuple[bool, bool]:
+        return await self._app._get_kernel_runner().receive_model_message(
+            request
+        )
 
     def to_ir(self) -> NotebookSerializationV1:
         return NotebookSerializationV1(

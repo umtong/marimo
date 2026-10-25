@@ -86,6 +86,7 @@ from marimo._messaging.variables import create_variable_value
 from marimo._output.rich_help import mddoc
 from marimo._plugins.core.web_component import JSONType
 from marimo._plugins.ui._core.ui_element import MarimoConvertValueException
+from marimo._plugins.ui._impl.anywidget.init import WIDGET_COMM_MANAGER
 from marimo._runtime import dataflow, handlers, marimo_pdb, patches
 from marimo._runtime.agent import Agent
 from marimo._runtime.app_meta import AppMeta
@@ -111,6 +112,7 @@ from marimo._runtime.commands import (
     ExecuteCellCommand,
     ExecuteStaleCellsCommand,
     InvokeFunctionCommand,
+    ModelCommand,
     OutOfBandCommand,
     SetBreakpointsCommand,
     UpdateCellConfigCommand,
@@ -2025,6 +2027,58 @@ class Kernel:
     @kernel_tracer.start_as_current_span("set_user_config")
     def set_user_config(self, request: UpdateUserConfigCommand) -> None:
         self._update_runtime_from_user_config(request.config)
+
+    async def receive_model_message(
+        self, request: ModelCommand
+    ) -> tuple[bool, bool]:
+        """Return whether the model was found and its reactive state updated."""
+        ctx = get_context()
+        comm = WIDGET_COMM_MANAGER.comms.get(request.model_id)
+        if (
+            comm is not None
+            and comm.runtime_context is not None
+            and comm.runtime_context is not ctx
+        ):
+            for child_context in ctx.children:
+                if child_context.app is None:
+                    continue
+                found, updated = await child_context.app.receive_model_message(
+                    request
+                )
+                if not found:
+                    continue
+                if updated:
+                    referring_cells: set[CellId_t] = set()
+                    for name, value in self.globals.items():
+                        if value is child_context.app._app:
+                            referring_cells.update(
+                                self.graph.get_referring_cells(
+                                    name, language="python"
+                                )
+                            )
+                    if self.lazy():
+                        self.graph.set_stale(referring_cells)
+                    else:
+                        await self._run_cells(referring_cells)
+                return True, updated
+            return False, False
+
+        ui_element_id, state = WIDGET_COMM_MANAGER.receive_comm_message(
+            request
+        )
+        updated = bool(ui_element_id and state) or bool(self.state_updates)
+        # Process model and UI updates together to avoid an extra cell run per
+        # widget message. Custom callbacks can also queue mo.state updates.
+        if ui_element_id and state:
+            await self.set_ui_element_value(
+                UpdateUIElementCommand.from_ids_and_values(
+                    [(UIElementId(ui_element_id), state)]
+                ),
+                notify_frontend=False,
+            )
+        elif self.state_updates:
+            await self._run_cells(set())
+        return comm is not None, updated
 
     @kernel_tracer.start_as_current_span("set_ui_element_value")
     async def set_ui_element_value(
