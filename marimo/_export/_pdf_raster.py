@@ -1,8 +1,10 @@
 # Copyright 2026 Marimo. All rights reserved.
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
+import sys
 from copy import deepcopy
 from dataclasses import dataclass
 from html import unescape
@@ -11,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 from marimo import _loggers
 from marimo._config.config import DisplayConfig
 from marimo._config.manager import get_default_config_manager
+from marimo._export._browser import run_browser_task
 from marimo._export._html_asset_server import HtmlAssetServer
 from marimo._export._raster_mime import (
     TEXT_HTML,
@@ -31,7 +34,10 @@ from marimo._utils.paths import marimo_package_path
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from marimo._export._status import PDFExportStatusCallback
+    from marimo._export._status import (
+        PDFExportStatusCallback,
+        PDFExportStatusEvent,
+    )
     from marimo._session.state.session_view import SessionView
 
 LOGGER = _loggers.marimo_logger()
@@ -563,6 +569,41 @@ async def _capture_pngs_from_page(
 ) -> dict[CellId_t, str]:
     """Capture PNG screenshots for target outputs from a single page URL."""
 
+    browser_status_callback = status_callback
+    if sys.platform == "win32" and status_callback is not None:
+        loop = asyncio.get_running_loop()
+
+        def deliver_status(event: PDFExportStatusEvent) -> None:
+            emit_pdf_export_status(
+                status_callback,
+                phase=event.phase,
+                message=event.message,
+                current=event.current,
+                total=event.total,
+            )
+
+        def forward_status(event: PDFExportStatusEvent) -> None:
+            loop.call_soon_threadsafe(deliver_status, event)
+
+        browser_status_callback = forward_status
+
+    return await run_browser_task(
+        _capture_pngs_with_browser(
+            page_url=page_url,
+            targets=targets,
+            scale=scale,
+            status_callback=browser_status_callback,
+        )
+    )
+
+
+async def _capture_pngs_with_browser(
+    *,
+    page_url: str,
+    targets: list[_RasterTarget],
+    scale: float,
+    status_callback: PDFExportStatusCallback | None = None,
+) -> dict[CellId_t, str]:
     from playwright.async_api import (  # type: ignore[import-not-found]
         TimeoutError as PlaywrightTimeoutError,
         async_playwright,

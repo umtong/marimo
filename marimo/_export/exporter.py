@@ -34,6 +34,7 @@ from marimo._convert.markdown.flavor import (
     normalize_markdown_flavor,
 )
 from marimo._convert.script import convert_from_ir_to_script
+from marimo._export._browser import run_browser_task
 from marimo._export._limits import MAX_VIRTUAL_FILE_INLINE_BYTES
 from marimo._export._nbconvert import (
     _nbconvert_tag_remove_config,
@@ -705,48 +706,9 @@ class Exporter:
             temp_path = f.name
 
         try:
-            from playwright.async_api import (  # type: ignore[import-not-found]
-                async_playwright,
+            pdf_data = await run_browser_task(
+                Exporter._print_slides_pdf(Exporter._to_file_uri(temp_path))
             )
-
-            async with async_playwright() as playwright:
-                browser = await playwright.chromium.launch()
-                try:
-                    page = await browser.new_page()
-                    # ?print-pdf tells reveal.js to use a linear print layout
-                    temp_uri = Exporter._to_file_uri(temp_path)
-                    await page.goto(
-                        f"{temp_uri}?print-pdf",
-                        wait_until="networkidle",
-                    )
-                    await page.evaluate(
-                        """
-                        () => {
-                          const reveal = window.Reveal;
-                          if (
-                            reveal &&
-                            typeof reveal.layout === "function"
-                          ) {
-                            reveal.layout();
-                          }
-                        }
-                        """
-                    )
-                    await page.wait_for_timeout(300)
-                    await page.add_style_tag(
-                        content=(
-                            ".pdf-page:last-of-type {"
-                            " page-break-after: auto !important;"
-                            " break-after: auto !important;"
-                            "}"
-                        )
-                    )
-                    pdf_data = await page.pdf(
-                        print_background=True,
-                        prefer_css_page_size=True,
-                    )
-                finally:
-                    await browser.close()
         finally:
             try:
                 os.unlink(temp_path)
@@ -756,6 +718,51 @@ class Exporter:
         if not isinstance(pdf_data, bytes):
             LOGGER.error("Slides PDF data is not bytes: %s", pdf_data)
             return None
+        return pdf_data
+
+    @staticmethod
+    async def _print_slides_pdf(temp_uri: str) -> bytes:
+        from playwright.async_api import (  # type: ignore[import-not-found]
+            async_playwright,
+        )
+
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            try:
+                page = await browser.new_page()
+                # ?print-pdf tells reveal.js to use a linear print layout
+                await page.goto(
+                    f"{temp_uri}?print-pdf",
+                    wait_until="networkidle",
+                )
+                await page.evaluate(
+                    """
+                    () => {
+                      const reveal = window.Reveal;
+                      if (
+                        reveal &&
+                        typeof reveal.layout === "function"
+                      ) {
+                        reveal.layout();
+                      }
+                    }
+                    """
+                )
+                await page.wait_for_timeout(300)
+                await page.add_style_tag(
+                    content=(
+                        ".pdf-page:last-of-type {"
+                        " page-break-after: auto !important;"
+                        " break-after: auto !important;"
+                        "}"
+                    )
+                )
+                pdf_data = await page.pdf(
+                    print_background=True,
+                    prefer_css_page_size=True,
+                )
+            finally:
+                await browser.close()
         return pdf_data
 
     def export_assets(self, directory: Path) -> None:

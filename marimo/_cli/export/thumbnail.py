@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import sys
+from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -27,6 +28,7 @@ from marimo._cli.sandbox import (
 from marimo._dependencies.dependencies import DependencyManager
 from marimo._environments.backends import launch_isolated
 from marimo._environments.overlay import runtime_overlay
+from marimo._export._browser import run_browser_task
 from marimo._export._html_asset_server import HtmlAssetServer
 from marimo._export.file import export_html
 from marimo._export.requests import (
@@ -39,6 +41,8 @@ from marimo._utils.marimo_path import MarimoPath
 from marimo._utils.paths import marimo_package_path, maybe_make_dirs
 
 if TYPE_CHECKING:
+    from playwright.async_api import Page  # type: ignore[import-not-found]
+
     from marimo._environments.sandbox import Backend
 
 
@@ -157,6 +161,75 @@ sys.stdout.write(result.text)
     )
 
 
+async def _screenshot_in_browser(
+    page_url: str,
+    out_path: Path,
+    width: int,
+    height: int,
+    scale: int,
+    timeout_ms: int,
+) -> None:
+    from playwright.async_api import async_playwright  # type: ignore[import-not-found]
+
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch()
+        try:
+            page = await browser.new_page(
+                viewport={"width": width, "height": height},
+                device_scale_factor=scale,
+            )
+            await _screenshot_page(page, page_url, out_path, timeout_ms)
+        finally:
+            await browser.close()
+
+
+async def _screenshot_page(
+    page: Page, page_url: str, out_path: Path, timeout_ms: int
+) -> None:
+    from playwright.async_api import (  # type: ignore[import-not-found]
+        TimeoutError as PlaywrightTimeoutError,
+    )
+
+    await page.emulate_media(reduced_motion="reduce")
+    await page.goto(page_url, wait_until="load")
+    # Hide chrome and watermarks marked for print so thumbnails stay focused on notebook content.
+    await page.add_style_tag(
+        content=(
+            '.print\\:hidden,[data-testid="watermark"]{display:none !important;}'
+        )
+    )
+    # Nb renderer starts cell contents as invisible for a short period to avoid flicker
+    # --> we wait for the first cell container to be visible before snapshotting.
+    try:
+        await page.wait_for_function(
+            r"""
+() => {
+  const root = document.getElementById("root");
+  if (!root) return false;
+
+  const cells = Array.from(document.querySelectorAll('div[id^="cell-"]'));
+  if (cells.length > 0) {
+    const hasVisibleCell = cells.some((cell) => {
+      const style = window.getComputedStyle(cell);
+      return style.visibility !== "hidden" && style.display !== "none";
+    });
+    if (hasVisibleCell) return true;
+  }
+
+  return root.childElementCount > 0;
+}
+""",
+            timeout=_READINESS_WAIT_TIMEOUT_MS,
+        )
+    except PlaywrightTimeoutError:
+        echo(
+            yellow("warning")
+            + ": readiness check timed out; capturing screenshot anyway."
+        )
+    await page.wait_for_timeout(timeout_ms)
+    await page.screenshot(path=str(out_path), full_page=False)
+
+
 async def _generate_thumbnails(
     *,
     notebooks: list[MarimoPath],
@@ -178,7 +251,6 @@ async def _generate_thumbnails(
 
     try:
         from playwright.async_api import (  # type: ignore[import-not-found]
-            TimeoutError as PlaywrightTimeoutError,
             async_playwright,
         )
     except ModuleNotFoundError as e:
@@ -195,14 +267,20 @@ async def _generate_thumbnails(
     with HtmlAssetServer(
         directory=static_dir, route="/__marimo_thumbnail__.html"
     ) as server:
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
-            context = await browser.new_context(
-                viewport={"width": width, "height": height},
-                device_scale_factor=scale,
-            )
-            page = await context.new_page()
-            await page.emulate_media(reduced_motion="reduce")
+        async with AsyncExitStack() as stack:
+            page = None
+            if sys.platform != "win32":
+                playwright = await stack.enter_async_context(
+                    async_playwright()
+                )
+                browser = await playwright.chromium.launch()
+                stack.push_async_callback(browser.close)
+                context = await browser.new_context(
+                    viewport={"width": width, "height": height},
+                    device_scale_factor=scale,
+                )
+                stack.push_async_callback(context.close)
+                page = await context.new_page()
 
             for index, notebook in enumerate(notebooks):
                 try:
@@ -233,43 +311,21 @@ async def _generate_thumbnails(
 
                     echo(f"Screenshotting -> {out_path}...")
                     page_url = f"{server.page_url}?v={index}"
-                    await page.goto(page_url, wait_until="load")
-                    # Hide chrome and watermarks marked for print so thumbnails stay focused on notebook content.
-                    await page.add_style_tag(
-                        content=(
-                            '.print\\:hidden,[data-testid="watermark"]{display:none !important;}'
+                    if page is None:
+                        await run_browser_task(
+                            _screenshot_in_browser(
+                                page_url,
+                                out_path,
+                                width,
+                                height,
+                                scale,
+                                timeout_ms,
+                            )
                         )
-                    )
-                    # Nb renderer starts cell contents as invisible for a short period to avoid flicker
-                    # --> we wait for the first cell container to be visible before snapshotting.
-                    try:
-                        await page.wait_for_function(
-                            r"""
-() => {
-  const root = document.getElementById("root");
-  if (!root) return false;
-
-  const cells = Array.from(document.querySelectorAll('div[id^="cell-"]'));
-  if (cells.length > 0) {
-    const hasVisibleCell = cells.some((cell) => {
-      const style = window.getComputedStyle(cell);
-      return style.visibility !== "hidden" && style.display !== "none";
-    });
-    if (hasVisibleCell) return true;
-  }
-
-  return root.childElementCount > 0;
-}
-""",
-                            timeout=_READINESS_WAIT_TIMEOUT_MS,
+                    else:
+                        await _screenshot_page(
+                            page, page_url, out_path, timeout_ms
                         )
-                    except PlaywrightTimeoutError:
-                        echo(
-                            yellow("warning")
-                            + ": readiness check timed out; capturing screenshot anyway."
-                        )
-                    await page.wait_for_timeout(timeout_ms)
-                    await page.screenshot(path=str(out_path), full_page=False)
 
                     echo(green("ok") + f": {out_path}")
                 except Exception as e:
@@ -277,9 +333,6 @@ async def _generate_thumbnails(
                     echo(red("error") + f": {notebook.short_name}: {e}")
                     if not continue_on_error:
                         raise
-
-            await context.close()
-            await browser.close()
 
     if failures:
         raise click.ClickException(

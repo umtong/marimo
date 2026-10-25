@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, TypedDict
 from urllib.parse import quote, unquote, urljoin, urlparse
 
 from marimo._environments import script_metadata
+from marimo._export._browser import run_browser_task
 from marimo._export._html_asset_server import HtmlAssetServer
 from marimo._pyodide.pyodide_constraints import PYODIDE_VERSION
 from marimo._schemas.export_options import WASMRuntimeConfig
@@ -240,6 +241,10 @@ def _rewrite_requirements(code: str, packages: dict[str, _Package]) -> str:
 
 async def check_offline_export_browser() -> None:
     """Verify the resolver's browser can start before downloading assets."""
+    await run_browser_task(_check_offline_export_browser())
+
+
+async def _check_offline_export_browser() -> None:
     from playwright.async_api import async_playwright  # type: ignore[import-not-found]
 
     async with async_playwright() as playwright:
@@ -248,6 +253,27 @@ async def check_offline_export_browser() -> None:
 
 
 async def _resolve_packages(
+    code: str,
+    *,
+    page_url: str,
+    index_url: str,
+    package_base_url: str,
+    lockfile: _Lockfile,
+    pypi_index_url: str | None,
+) -> _Lockfile:
+    return await run_browser_task(
+        _resolve_packages_with_browser(
+            code,
+            page_url=page_url,
+            index_url=index_url,
+            package_base_url=package_base_url,
+            lockfile=lockfile,
+            pypi_index_url=pypi_index_url,
+        )
+    )
+
+
+async def _resolve_packages_with_browser(
     code: str,
     *,
     page_url: str,
