@@ -122,11 +122,11 @@ def _parse_sql_duckdb(
         LOGGER.debug(f"Error sanitizing SQL query: {e}")
 
     relation = duckdb.execute(json_serialize_query, [query])
-    fetch_result = relation.fetchone()
-    if fetch_result is None:
+    fetch_results = relation.fetchall()
+    if not fetch_results:
         return None, "No result from DuckDB parse query"
 
-    parse_response = fetch_result[0]
+    parse_response = fetch_results[0][0]
     parsed_error = msgspec.json.decode(parse_response, type=DuckDBParseError)
 
     if not parsed_error.error:

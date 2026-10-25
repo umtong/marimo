@@ -74,7 +74,7 @@ def get_sql_stats(
 
     stats_result: tuple[int, ...] | None = wrapped_sql(
         stats_query, connection=None
-    ).fetchone()
+    ).fetchall()[0]
     if stats_result is None:
         raise ValueError(
             f"Column {column_name} not found in table {table_name}"
@@ -160,10 +160,10 @@ def get_column_type(
         AND table_catalog = $3
         AND column_name = $4
         """
-        column_info_result: tuple[str] | None = execute_duckdb_sql(
+        column_info_results: list[tuple[str]] = execute_duckdb_sql(
             column_info_query,
             [table_name, schema_name, db_name, column_name],
-        ).fetchone()
+        ).fetchall()
     else:
         # Simple table name
         table_name = fully_qualified_table_name
@@ -173,17 +173,17 @@ def get_column_type(
         WHERE table_name = $1
         AND column_name = $2
         """
-        column_info_result = execute_duckdb_sql(
+        column_info_results = execute_duckdb_sql(
             column_info_query,
             [table_name, column_name],
-        ).fetchone()
+        ).fetchall()
 
-    if column_info_result is None:
+    if not column_info_results:
         raise ValueError(
             f"Column {column_name} not found in table {table_name}"
         )
 
-    db_column_type = column_info_result[0].lower()
+    db_column_type = column_info_results[0][0].lower()
     return _db_type_to_data_type(db_column_type)
 
 

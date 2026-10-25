@@ -141,7 +141,7 @@ class DuckDBEngine(SQLConnection[Optional["duckdb.DuckDBPyConnection"]]):
                 duckdb.DuckDBPyConnection, self._connection or duckdb
             )
             with self._install_connection(connection):
-                row = connection.sql("SELECT CURRENT_DATABASE()").fetchone()
+                row = connection.sql("SELECT CURRENT_DATABASE()").fetchall()[0]
             if row is not None and row[0] is not None:
                 return str(row[0])
             return None
@@ -157,7 +157,7 @@ class DuckDBEngine(SQLConnection[Optional["duckdb.DuckDBPyConnection"]]):
                 duckdb.DuckDBPyConnection, self._connection or duckdb
             )
             with self._install_connection(connection):
-                row = connection.sql("SELECT CURRENT_SCHEMA()").fetchone()
+                row = connection.sql("SELECT CURRENT_SCHEMA()").fetchall()[0]
             if row is not None and row[0] is not None:
                 return str(row[0])
             return None
