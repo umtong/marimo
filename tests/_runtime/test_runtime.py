@@ -3873,7 +3873,7 @@ class TestSQL:
                 "SELECT count(*) FROM information_schema.tables "
                 "WHERE table_catalog = 'memory' AND table_schema = 'main' "
                 "AND table_name = 'holdings'"
-            ).fetchone()
+            ).fetchall()[0]
             assert row is not None
             return bool(row[0] > 0)
 
