@@ -19,7 +19,11 @@ from marimo._ast.names import (
     SETUP_CELL_NAME,
     TOPLEVEL_CELL_PREFIX,
 )
-from marimo._ast.parse import ast_parse
+from marimo._ast.parse import (
+    ast_parse,
+    get_valid_decorator,
+    split_source_lines,
+)
 from marimo._ast.toplevel import TopLevelExtraction, TopLevelStatus
 from marimo._ast.variables import BUILTINS
 from marimo._ast.visitor import Name, VariableData
@@ -494,12 +498,38 @@ def serialize_cell(
 
 
 def safe_serialize_cell(
-    extraction: TopLevelExtraction, status: TopLevelStatus
+    extraction: TopLevelExtraction,
+    status: TopLevelStatus,
+    decorator_comment: str = "",
+    signature_comment: str = "",
 ) -> str:
     """Additional defensive layer- we should _never_ generate invalid code."""
     code = serialize_cell(extraction, status)
     try:
-        ast_parse(code)
+        tree = ast_parse(code)
+        if (decorator_comment or signature_comment) and isinstance(
+            tree.body[0], (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+        ):
+            decorator = get_valid_decorator(tree.body[0])
+            lines = split_source_lines(code)
+            if (
+                decorator_comment
+                and decorator is not None
+                and decorator.end_lineno is not None
+            ):
+                lines[decorator.end_lineno - 1] += f"  {decorator_comment}"
+            if signature_comment:
+                header_start = tree.body[0].lineno - 1
+                header = "\n".join(lines[header_start:])
+                for item in tokenize.tokenize(
+                    io.BytesIO(header.encode("utf-8")).readline
+                ):
+                    if item.type == tokenize.NEWLINE:
+                        lines[header_start + item.start[0] - 1] += (
+                            f"  {signature_comment}"
+                        )
+                        break
+            code = "\n".join(lines)
     except SyntaxError as e:
         LOGGER.warning(
             f"Generated code for cell {status.name} is invalid, "
@@ -549,6 +579,10 @@ def generate_filecontents_from_ir(ir: NotebookSerializationV1) -> str:
         cell_configs=[CellConfig.from_dict(cell.options) for cell in ir.cells],
         config=_AppConfig.from_untrusted_dict(ir.app.options, silent=silent),
         header_comments=header_comments,
+        cell_comments=[
+            (cell.decorator_comment, cell.signature_comment)
+            for cell in ir.cells
+        ],
     )
 
 
@@ -588,6 +622,7 @@ def generate_filecontents(
     cell_configs: list[CellConfig],
     config: _AppConfig | None = None,
     header_comments: str | None = None,
+    cell_comments: list[tuple[str, str]] | None = None,
 ) -> str:
     """Translates a sequences of codes (cells) to a Python file"""
 
@@ -598,13 +633,20 @@ def generate_filecontents(
         if name == "__" or not name:
             names[idx] = DEFAULT_CELL_NAME
 
+    comments = list(cell_comments or [("", "")] * len(codes))
+    setup_index = (
+        names.index(SETUP_CELL_NAME) if SETUP_CELL_NAME in names else None
+    )
     setup_cell = pop_setup_cell(codes, names, cell_configs)
+    if setup_cell is not None and setup_index is not None:
+        comments.pop(setup_index)
     toplevel_defs: set[Name] = set()
     if setup_cell:
         toplevel_defs = set(setup_cell.defs)
     extraction = TopLevelExtraction(codes, names, cell_configs, toplevel_defs)
     cell_blocks = [
-        safe_serialize_cell(extraction, status) for status in extraction
+        safe_serialize_cell(extraction, status, *comment)
+        for status, comment in zip(extraction, comments, strict=True)
     ]
 
     filecontents = []

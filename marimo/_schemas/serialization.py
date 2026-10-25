@@ -44,6 +44,9 @@ class CellDef(Node):
     name: str = DEFAULT_CELL_NAME
     options: dict[str, Any] = field(default_factory=dict)
 
+    decorator_comment: str = ""
+    signature_comment: str = ""
+
     _ast: NodeRef | None = None
 
     def __post_init__(self) -> None:

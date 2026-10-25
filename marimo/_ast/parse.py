@@ -265,6 +265,20 @@ class Extractor:
             block_start="def",
         )
         start_lineno = node.lineno + lineno_offset
+        signature_comment = ""
+        previous_tokens: list[TokenInfo] = []
+        for item in tokenize(
+            io.BytesIO(function_code.encode("utf-8")).readline
+        ):
+            if item.type == token_types.NEWLINE:
+                if (
+                    len(previous_tokens) >= 2
+                    and previous_tokens[-1].type == token_types.COMMENT
+                    and previous_tokens[-2].string == ":"
+                ):
+                    signature_comment = previous_tokens[-1].string
+                break
+            previous_tokens.append(item)
 
         end_lineno = _none_to_0(node.end_lineno)
         end_col_offset = node.end_col_offset
@@ -306,6 +320,7 @@ class Extractor:
                     return ParseResult(
                         CellDef(
                             code="",
+                            signature_comment=signature_comment,
                             options=kwargs,
                             lineno=start_lineno,
                             col_offset=node.col_offset + col_offset,
@@ -367,6 +382,7 @@ class Extractor:
         return ParseResult(
             CellDef(
                 code=fixed_dedent(cell_code),
+                signature_comment=signature_comment,
                 options=kwargs,
                 lineno=start_lineno - 1,
                 col_offset=node.col_offset + col_offset,
@@ -418,6 +434,15 @@ class Extractor:
                 else:
                     attribute = decorator.attr
 
+            decorator_comment = ""
+            if decorator is not None and decorator.end_lineno is not None:
+                line = self.lines[decorator.end_lineno - 1].encode("utf-8")
+                suffix = (
+                    line[decorator.end_col_offset :].decode("utf-8").strip()
+                )
+                if suffix.startswith("#"):
+                    decorator_comment = suffix
+
             # switch on app.cell vs app.function
             if attribute == "cell":
                 assert isinstance(
@@ -425,7 +450,9 @@ class Extractor:
                 ), "@app.cell cannot be used on classes."
                 cell_result = self.to_cell_def(node, kwargs)
                 violations.extend(cell_result.violations)
-                return ParseResult(cell_result.unwrap(), violations=violations)
+                cell = cell_result.unwrap()
+                cell.decorator_comment = decorator_comment
+                return ParseResult(cell, violations=violations)
             cell_types: dict[str | None, type[CellDef]] = {
                 "function": FunctionCell,
                 "class_definition": ClassCell,
@@ -437,6 +464,7 @@ class Extractor:
                 return ParseResult(
                     cell_type(
                         code=code_result.unwrap(),
+                        decorator_comment=decorator_comment,
                         _ast=node,
                         options=kwargs,
                     ),
