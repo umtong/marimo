@@ -216,10 +216,13 @@ try {
   NodeFs.writeFileSync(output, header + NodeFs.readFileSync(output, "utf8"));
   const table = NodePath.join(temporary, "operations-table.ts");
   NodeFs.writeFileSync(table, operationsModule(spec));
-  NodeChildProcess.execFileSync(
-    NodePath.join(root, "node_modules/.bin/oxfmt"),
-    ["--config", NodePath.join(root, ".oxfmtrc.json"), output, table],
-  );
+  NodeChildProcess.execFileSync(process.execPath, [
+    NodePath.join(root, "node_modules/oxfmt/bin/oxfmt"),
+    "--config",
+    NodePath.join(root, ".oxfmtrc.json"),
+    output,
+    table,
+  ]);
   if (!args.check) {
     NodeFs.mkdirSync(source, { recursive: true });
   }

@@ -19,7 +19,7 @@ const snapshot = NodeFs.readFileSync(
   "utf8",
 );
 /** The fixture's frames up to and including `ready`. */
-const throughReady = snapshot.slice(0, snapshot.indexOf("id: 96\n"));
+const throughReady = snapshot.slice(0, snapshot.search(/^id: 96\r?$/m));
 
 const encoder = new TextEncoder();
 
